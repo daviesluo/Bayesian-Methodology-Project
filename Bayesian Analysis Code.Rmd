@@ -1,0 +1,750 @@
+---
+title: "Bayesian Analysis Report"
+author: "Davies Luo (Zheng Luo)"
+date: "2024-02-22"
+output: 
+  pdf_document:
+    extra_dependencies: ["caption", "float"]
+header-includes:
+  - \usepackage{caption}
+  - \captionsetup[table]{font=small}
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(knitr)
+library(corrplot)
+library(rjags)
+library(coda)
+```
+
+# Introduction
+Cross-country running is a sport that amalgamates endurance, strategy, and adaptability, challenging athletes across varied terrains and conditions. In this report, I will delve into the North East Harrier League dataset to unearth the multifaceted influences on race performance. Through multiple Bayesian analytical methods, I will scrutinise race times in relation to athletes' age, pack classification, and the different characteristics of each course, alongside various environmental factors. The exploratory journey seeks to distill these complexities into a coherent narrative, elucidating the subtle and overt forces that affect the finishing time the most in this competitive sports.
+
+# Data Exploratory
+Before diving into the complexities of Bayesian Analysis, it is essential to conduct a thorough exploratory data analysis (EDA). EDA is a critical step in the data analysis process, as it allows me to uncover underlying structures, extract important variables, detect anomalies, test assumptions, and develop an intuitive understanding of the dataset. The dataset encompasses a myriad of factors including athlete age, speed pack, course name and environmental conditions with physical attributes of each race. The following table of the data head offers a preliminary view into the complex interplay of variables that I aim to unravel:
+```{r echo=FALSE, fig.align = "center", fig.cap="The summary of the data", fig.pos="H"}
+# Set seed for reproducibility
+set.seed(230582066)
+
+# Read the dataset
+run_data <- read.table("/Users/daviesluo/Desktop/dataset/rundata.txt", header = TRUE, sep = "", quote = "\"")
+
+# Sample 1000 rows from the dataset
+run_sample <- run_data[sample(1:nrow(run_data), 1000), ]
+
+kable(head(run_sample))
+```
+From the initial look of the data, there's lack of record for the 'Elevation' on the course 'Alnwick' so I remove the 'Elevation' for consistency. Furthermore, I noticed there are "guest" and "n/c" age groups in 'Age' variable, which do not contribute to the analysis, so I get them removed as well.
+
+Then it is imperative to cleanse the dataset, ensuring a foundation built on accuracy and completeness. This process involves the removal of any incomplete records, as denoted by NA values, which might otherwise skew the interpretations. Moreover, I convert categorical variables into a numeric codex that facilitates computational analysis. 'Pack', 'Age', and 'Course' transmute from mere labels to quantifiable entities, made suitable for the explorations ahead. Furthermore, I notice multiple duplication in 'Number', suggesting I need to consider individuality of athletes in further analysis. 
+```{r echo=FALSE, fig.align = "center", fig.cap="The summary of the cleaned data", fig.pos="H"}
+# Remove the column Elevation
+run_sample <- run_sample[, !(names(run_sample) %in% c("Elevation"))]
+
+# Clean NA and useless values
+run_sample <- na.omit(run_sample)
+run_sample <- run_sample %>% filter(Age != c("guest", "n/c"))
+run <- run_sample
+
+# Convert variables to numeric values
+run$Number <- as.numeric(run$Number)
+run$Year <- as.numeric(run$Year)
+run$Temperature <- as.numeric(run$Temperature)
+run$Windspeed <- as.numeric(run$Windspeed)
+run$Distance <- as.numeric(run$Distance)
+run$Response <- as.numeric(run$Response)
+run$Pack <- as.numeric(factor(run$Pack))
+run$Age <- as.numeric(factor(run$Age))
+run$Course <- as.numeric(factor(run$Course))
+
+# Print the modified head of the dataset
+kable(head(run), row.names = FALSE)
+```
+
+### Correlation Heatmap
+With the data primed, now I proceed to weave a correlation matrix, a web that captures the essence of interactivity between variables. This matrix illuminates the strengths of relationships within the dataset, where I can discern patterns, identify the strands of strongest connection, and subtle influence among them. 
+```{r echo=FALSE, fig.align = "center", out.width = "50%", out.height = "50%", fig.cap="Correlation Heatmap", fig.pos="H"}
+correlations <- cor(run %>% select(-Number))
+corrplot(correlations, method = "color")
+```
+The correlation matrix has revealed several interesting relationships that worth further investigation. I observe a positive correlation between 'Response' and 'Age', indicating that older age groups might have longer race times. Additionally, 'Pack' also shows a strong correlation with 'Response', suggesting that different pack groups could be associated with faster times. To understand how these factors may influence race times, I will conduct a series of detailed exploratory analyses.
+
+### Exploration of Age and Response
+To delve deeper into the relationship between the athlete's age group and their race times, I will create a box plot with a regression line. This will help visualise whether older age groups tend to have longer race times, as suggested by the correlation matrix.
+```{r echo=FALSE, fig.align = "center",  fig.height = 2, fig.width = 6, fig.cap="Race Times across Different Age Groups", fig.pos="H", warning = FALSE}
+ggplot(run_sample, aes(x = factor(Age), y = Response)) + 
+  geom_boxplot() + 
+  labs(x = "Age Group", y = "Race Time")
+```
+The boxplot of race times across different age groups reveals a clear trend in performance with respect to age. Younger runners, particularly those under 20 (MU20), tend to have quicker race times, as indicated by the lower median and smaller interquartile range. As age increases, there is a noticeable increase in both the median race times and the variability of those times, which is evident in the widening of the boxplots for older age groups. The veteran categories, particularly those over 60 (MV60 and above), display the highest race times with increased spread, suggesting a wider range of performance within these groups. These findings prompt further investigation into the impact of age on race performance, controlling for other variables such as course difficulty and weather conditions, to better understand the extent of its influence on the race times.
+
+### Exploration of Age, Pack and Response
+Given a positive correlation between 'Pack' and 'Response', I will analyse the distribution of response time within pack categories to see if there is a trend towards runners being in slower or faster packs. And in order o understand the interplay between age and pack classification, I will add age into the plot as well.
+```{r echo=FALSE, fig.align = "center",  fig.height = 2.8, fig.width = 6, fig.cap="Race Times across Different Pack Groups", fig.pos="H"}
+ggplot(run_sample, aes(x = factor(Pack), y = Response, fill = factor(Age))) + 
+  geom_boxplot() + 
+  labs(x = "Pack Group", 
+       y = "Race Time") +
+  scale_fill_brewer(palette = "Set3") +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+Analysing race times across the different pack groups — fast (F), medium (M), and slow (S) — indicates a stark differentiation in performance. Runners in the fast pack show notably quicker race times with a lower median and a tight interquartile range, implying a consistent performance among these athletes. And within the fast pack, the spread of race times is relatively narrow across the younger age groups, signifying top performance are almost only among these younger athletes. The medium pack displays a broader range, with middle-aged groups (MV50 to MV55) being well-represented. Intriguingly, in the slow pack, there's a visible trend where older age groups, especially those above 60 (MV60 and beyond), tend to have not only higher race times but also a more considerable spread, indicating a diverse range of performance. These initial observations will be further examined through more complex models to assess the true impact of pack and age classification on race times while considering other potential confounding factors.
+
+### Exploration of Course and Response
+In the realm of cross-country running, the course plays a pivotal role in athlete performance, each race venue may present its unique set of challenges. The variable 'Course' offers a natural experiment to examine how geographic and environmental factors impact race times.
+```{r echo=FALSE, fig.align = "center",  fig.height = 2, fig.width = 6, fig.cap="Race Times across Different Course Groups", fig.pos="H"}
+ggplot(run_sample, aes(x = factor(Course), y = Response)) + 
+  geom_boxplot() + 
+  labs(x = "Course Group", y = "Race Time")
+```
+The comparison of race times across different course groups presents a nuanced picture of the impact of race location on performance. Certain courses, such as Wrekenton and Thornley, show higher medians and greater variability in race times, suggesting these courses may present more challenging conditions or profiles that could affect race performance. Conversely, courses like Alnwick and Aykley demonstrate lower medians, which could indicate less challenging terrain or more favorable conditions for faster times. The insights gained from this visualisation serve as a foundation for subsequent analyses where course effects will be quantified more precisely using multilevel models that take into account the hierarchical nature of the data, alongside other race-specific factors like weather profiles.
+
+### Exploration of Response Distribution
+Before delving into complex model building, it is crucial to examine the underlying distribution of the 'Response' variable — the race times. A quintessential step in this exploratory phase is the construction of a Quantile-Quantile (QQ) plot, which serves to compare the distribution of race times against a theoretical normal distribution. The normality assumption underpins many statistical models, including the conventional linear regression.
+```{r echo=FALSE, fig.align = "center", out.width = "50%", out.height = "50%", fig.cap="QQ Plot for Response", fig.pos="H"}
+qqnorm(run$Response)
+qqline(run$Response, col = "red")
+```
+The alignment of the data points along the reference line indicates that the race times are reasonably well-modeled by a normal distribution, especially in the central quantiles. However, slight deviations at the tails suggest potential outliers or extreme values that are not entirely captured by a normal model. Despite these minor discrepancies, the overall pattern justifies the consideration of models that assume normality, such as the Normal Linear Regression Model. Moreover, the presence of slight deviations encourages the exploration of Non-conjugate Models, which do not strictly adhere to normality assumptions and can offer more flexibility. Additionally, to uncover the synergy between variables, such as how age and pack dynamics jointly influence race times, aturally leads us to consider Interaction model as well. Furthermore, the layered complexity of our data — with its multitude of races, courses, and athletes — makes Hierarchical models an especially attractive option for capturing the nested structures within. I believe these models will allow me to have a nuanced understanding of the race times that accounts for both individual and group-level variability.
+
+# Bayesian Analysis
+
+## Non-Conjugate Model
+The Non-Conjugate model represents a sophisticated approach to understanding the intricacies of athlete performance data. Unlike conjugate models where the posterior distributions belong to the same family as the prior, non-conjugate models do not restrict the form of the posterior. This flexibility allows me to accommodate more realistic and intricate relationships between the variables. The mathematical representation of the non-conjugate model is given by:
+
+\[ \text{Response}_i \sim \mathcal{N}(\mu_i, \tau) \]
+
+where the mean \(\mu_i\) is a linear combination of the predictors and random effects:
+
+\[ \mu_i = \beta_0 + \beta_{\text{Course}} \times \text{Course}_i + \beta_{\text{Age}} \times \text{Age}_i + \beta_{\text{Temp}} \times \text{Temperature}_i + \beta_{\text{Pack}} \times \text{Pack}_i  \]
+
+\[+ \beta_{\text{Year}} \times \text{Year}_i + \beta_{\text{Wind}} \times \text{Windspeed}_i + \beta_{\text{Dist}} \times \text{Distance}_i + u_{\text{Number}_i} \]
+
+In this equation, \(\beta\) coefficients represent the fixed effects of the respective variables, while \(u_{\text{Number}_i}\) denotes the random effects associated with each athlete, capturing individual variability beyond the fixed effects. The precision of the response variable is denoted by \(\tau\), and its reciprocal is the variance, known as \(\sigma^2\). Random effects \(u\) are normally distributed with mean 0 and precision \(\tau_u\), allowing the model to account for the repeated measures within athletes.
+
+The priors for the model parameters were chosen to be weakly informative, (0,1) sets a neutral, centered starting point for the regression coefficients, suggesting no initial bias towards positive or negative effects. The (1,0.001) prior for precision terms reflects an expectation of variability in the data, allowing the model to be informed primarily by the observed data rather than strong prior beliefs.
+
+Strategically, the fitting process will involve running multiple Markov Chain Monte Carlo (MCMC) chains to ensure a thorough exploration of the parameter space and to assess convergence using diagnostics such as the Gelman-Rubin statistic, the effective sample size and visual inspections of trace plots will further corroborate the stability and reliability of the estimates. After assuring convergence, I will then use the 95% credible intervals to check if each variable is useful for this model or not.
+
+```{r include=FALSE}
+model_string <- "
+model {
+   for(i in 1:N) {
+    Response[i] ~ dnorm(mu[i], tau)
+    mu[i] <- beta0 + betaCourse * Course[i] + betaAge * Age[i] + betaTemp * Temperature[i] + betaPack * Pack[i] + betaYear * Year[i] + betaWind * Windspeed[i] + betaDist * Distance[i] + u[Number[i]]
+  }
+  
+  beta0 ~ dnorm(0, 1) 
+  betaCourse ~ dnorm(0, 1) 
+  betaAge ~ dnorm(0, 1) 
+  betaTemp ~ dnorm(0, 1) 
+  betaPack ~ dnorm(0, 1) 
+  betaYear ~ dnorm(0, 1) 
+  betaWind ~ dnorm(0, 1) 
+  betaDist ~ dnorm(0, 1) 
+  
+  # Priors for random effects
+  for (j in 1:maxNumber) {
+    u[j] ~ dnorm(0, tau_u)
+  }
+  
+  tau ~ dgamma(1, 0.001)
+  tau_u ~ dgamma(1, 0.001)
+  sigma <- 1 / sqrt(tau)
+}
+"
+
+# Data for the model
+model_data <- list(
+  Response = run$Response,
+  Course = run$Course,
+  Age = run$Age,
+  Temperature = run$Temperature,
+  Pack = run$Pack,
+  Year = run$Year,
+  Windspeed = run$Windspeed,
+  Distance = run$Distance,
+  Number = run$Number,
+  N = nrow(run),
+  maxNumber = max(run$Number)
+)
+
+# Initial values for the MCMC chain
+model_inits <- function() {
+  list(
+    beta0 = rnorm(1, 0, 1),
+    betaCourse = rnorm(1, 0, 1),
+    betaAge = rnorm(1, 0, 1),
+    betaTemp = rnorm(1, 0, 1),
+    betaPack = rnorm(1, 0, 1),
+    betaYear = rnorm(1, 0, 1),
+    betaWind = rnorm(1, 0, 1),
+    betaDist = rnorm(1, 0, 1),
+    tau = rgamma(1, 1, 0.001),
+    u = rep(0, max(run$Number))
+  )
+}
+
+# Parameters to monitor
+params <- c("beta0", "betaCourse", "betaAge", "betaTemp", "betaPack", 
+            "betaYear", "betaWind", "betaDist", "sigma", "tau", "tau_u")
+
+# Fit the model
+model_fit <- jags.model(textConnection(model_string), 
+                        data = model_data, 
+                        inits = model_inits, 
+                        n.chains = 3, 
+                        n.adapt = 1000)
+
+# Burn-in
+update(model_fit, 50000)
+
+# MCMC sampling
+model_samples <- coda.samples(model = model_fit, 
+                              variable.names = params, 
+                              n.iter = 500000,
+                              thin = 10) 
+
+```
+
+
+```{r echo=FALSE, fig.align = "center", fig.cap="Trace Plots and Density Plots of Non-Conjugate Model", fig.pos = "H", fig.height = 3.5, fig.width = 10}
+# MCMC diagnostics
+par(mfrow=c(2,6))
+traceplot(model_samples)
+```
+
+```{r echo=FALSE, fig.align = "center", out.width = "50%", out.height = "50%", fig.pos="H"}
+# Checking convergence using the Gelman-Rubin statistic
+gelman_results <- gelman.diag(model_samples)
+psrf_df <- as.data.frame(gelman_results$psrf)
+kable(t(psrf_df), caption = "Gelman-Rubin statistic of Non-Conjugate Model", digits = 2)
+
+# Checking effective sample sizes
+kable(t(effectiveSize(model_samples)), caption = "Effective Sample Sizes of Non-Conjugate Model", digits = 2)
+```
+As depicted in Figure 6, the trace plots The trace plots demonstrate satisfactory convergence characteristics. The trace plots, which visualise the MCMC chains for each parameter, exhibit the desired "fuzzy caterpillar" appearance, with the chains mixing well and covering the parameter space evenly. This suggests that the chains are stable and have reached equilibrium. The Gelman-Rubin statistic, as shown in Table 3, corroborates this by presenting values close to 1 for all parameters, indicating no significant between-chain variability and thus supporting the assumption of convergence. Furthermore, the effective sample sizes for the parameters, detailed in Table 4, are considerably high, with values well into the thousands, which suggests that the MCMC samples are representative and reliable for posterior inference.
+
+```{r echo=FALSE, fig.align = "center", fig.height = 3.5, fig.width = 10, fig.pos="H"}
+# Convert each chain into a data frame and combine them
+chains_df_list <- lapply(model_samples, as.data.frame)
+
+# Combine all the data frames into one, adding a column to indicate the chain
+posterior_samples <- do.call(rbind, chains_df_list)
+
+par(mfrow=c(2,6))
+
+# Loop through each parameter tp plot its density plot with credible interval
+for(param in params) {
+  # Extract samples for the parameter
+  param_samples <- as.vector(posterior_samples[[param]])
+  
+  # Calculate the 95% credible interval
+  ci <- HPDinterval(mcmc(param_samples), prob = 0.95)
+  
+  # Plot the density
+  plot(density(param_samples), main = param, xlab = "", ylab = "Density")
+  abline(v = ci[1,], col = "red", lty = 2)
+}
+
+# Summarising the posterior distribution
+summary_stats <- summary(model_samples)
+
+stats_df <- data.frame(
+  Mean = summary_stats$statistics[, "Mean"],
+  SD = summary_stats$statistics[, "SD"],
+  `2.5%` = summary_stats$quantiles[, "2.5%"],
+  `25%` = summary_stats$quantiles[, "25%"],
+  `50%` = summary_stats$quantiles[, "50%"],
+  `75%` = summary_stats$quantiles[, "75%"],
+  `97.5%` = summary_stats$quantiles[, "97.5%"]
+)
+
+kable(stats_df, caption = "Posterior distribution of Non-Conjugate Model Summary", digits = 2)
+```
+The posterior distribution of the parameters, summarised in Table 5, provides insights into the relationship between the predictors and the race times. The mean values of beta coefficients reflect the average influence of each predictor on race times, with 'betaDist' showing a notably strong negative association, suggesting longer distances are correlated with longer race times.
+
+The high effective sample sizes for all parameters indicate a high degree of confidence in these estimates. The density plots for the beta coefficients further reinforce these findings, with the majority of the posterior mass centered around the mean values. The 95% credible intervals (dashed red lines) providing a range within which the true parameter values likely fall with high probability, and all variables' posterior density does not includes 0, all the variables will be retained from the model.
+
+## Normal Linear Regression Model
+Bayesian Normal Linear Regression extends the framework of linear regression into the Bayesian paradigm. By assuming a linear relationship between the response and the predictors, the model provides estimates of the average effect of each predictor, holding the others constant. This linearity assumption, coupled with the normality of errors, allows me to infer the significance and magnitude of each predictor's influence on race times. The Normal Linear Regression Model used in the analysis can be expressed by the following equation:
+
+\[
+Y_i = \beta_0 + \beta_1 X_{i1} + \beta_2 X_{i2} + \ldots + \beta_k X_{ik} + \epsilon_i
+\]
+
+where \(Y_i\) is the response variable, representing the race time for the \(i^{th}\) participant. \(X_{ij}\) represents the \(j^{th}\) predictor variable for the \(i^{th}\) participant. The intercept term, \(\beta_0\), captures the expected value of \(Y\) when all predictors are at their reference levels. The coefficients \(\beta_j\) for \(j = 1, \ldots, k\) correspond to each predictor, signifying the expected change in the response variable per unit change in the predictor. Finally, \(\epsilon_i\) is the error term for the \(i^{th}\) observation, which is presumed to be normally distributed with a mean of zero and constant variance \(\sigma^2\).
+
+In setting the prior for the Bayesian Normal Linear Regression Model, I employed the empirical Bayes method. The variance of the response variable, which reflects the variability of race times, was calculated from the data and found to be approximately 47.5, thereby anchoring the prior belief to the observed data. To allow the data to substantially inform the posterior distribution, I set the prior degrees of freedom d to 1. This choice represents a weakly informative prior, ensuring that the posterior inferences are driven more by the data than by strong prior assumptions. Then the prior scale v and the precision were caculated out to be 0.021.
+
+I then use the linmod function, which takes the prior and data to compute the posterior distribution. This function combines the likelihood of the observed data with the prior distribution using Bayes' theorem and returns the posterior mean and variance of the regression coefficients.
+
+```{r include=FALSE}
+# Bayesian Normal Linear Regression
+linmod <- function(prior, X, y, unknown = TRUE) {
+  Xt <- t(X)
+  Cd <- Xt %*% X
+  Xty <- Xt %*% y
+  b0 <- prior$b
+  betahat <- solve(Cd, Xty)
+  n <- length(y)
+  C0 <- solve(prior$V / prior$v)
+  C1 <- C0 + Cd
+  b1 <- solve(C1, (C0 %*% b0 + Cd %*% betahat))
+  res <- y - X %*% betahat
+  Sd <- sum(res ^ 2)
+  d1 <- prior$d + n
+  R <- t(b0) %*% C0 %*% b0 + t(betahat) %*% Cd %*% betahat - t(b1) %*% C1 %*% b1
+  nvd <- Sd + R
+  v1 <- (prior$d * prior$v + nvd) / d1
+  v1 <- v1[1, 1]
+  V1 <- v1 * solve(C1)
+  result <- list(d = d1, v = v1, b = b1, V = V1)
+  result
+}
+
+X <- model.matrix(~ Course + Age + Pack + Temperature + Windspeed + Distance, data=run)
+
+prior <- list(
+  d = 1,
+  v = 0.021,
+  b = rep(0, ncol(X)),
+  V = diag(0.021, ncol(X))
+)
+
+# Fit the model
+response <- run$Response
+posterior <- linmod(prior, X, response)
+```
+
+```{r echo=FALSE, fig.align = "center", fig.pos = "H", fig.width = 10}
+coefficients_df <- data.frame(Value = posterior$b)
+kable(t((coefficients_df)), caption = "Coefficents Summary of Normal Linear Regression Model", digits = 2)
+```
+
+```{r include=FALSE}
+set.seed(123)  # For reproducibility
+num_samples <- 1000
+simulated_samples <- mapply(function(mean, sd) rnorm(num_samples, mean, sd), mean = posterior$b, sd = sqrt(diag(posterior$V)))
+
+samples_df <- as.data.frame(simulated_samples)
+
+sample_values <- as.vector(as.matrix(samples_df))
+
+variable_names <- names(coef(lm(Response ~ Course + Age + Pack + Temperature + Windspeed + Distance, data=run)))
+
+samples_df <- as.data.frame(simulated_samples)
+names(samples_df) <- variable_names
+
+library(reshape2)
+samples_long <- melt(samples_df, variable.name = "Coefficient", value.name = "Sample_Value")
+```
+
+```{r echo=FALSE, fig.align = "center", fig.cap="Density Plots for Posterior Distributions of Coefficients", fig.pos = "H", fig.height = 2.7, fig.width = 10}
+ggplot(samples_long, aes(x = Sample_Value)) +
+  geom_density(alpha = 0.5, color = "black", fill = "white") +
+  facet_wrap(~ Coefficient, ncol = 4, scales = "free", drop = TRUE) + 
+  labs(x = "Sample Value",
+       y = "Density") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+The density plots for the posterior distributions of coefficients from the Normal Linear Regression Model provide key insights into the influence of each variable on the race times. The intercept's central value suggests a baseline for race times when other predictors are at reference levels. The coefficients for Pack and Age have relatively quite high value of means, indicating notable influences on race times, with Pack being particularly impactful. It is a bit lower for the Age variable, but still is a critical determinant, suggesting that both pack and age classification significantly affects performance.
+
+Temperature displays an inverse relationship with race times, where a unit increase in temperature is associated with a decrease in race time. This implies better performance in cooler weather. Windspeed’s slight negative coefficient suggests minimal but noticeable effects on race times. Distance has the most substantial coefficient, clearly indicating that as race distances increase, so do race times. This relationship emphasises the importance of endurance training for longer races.
+
+Collectively, these coefficients highlight the multifactorial nature of race performance. Age and pack level are pivotal, but environmental factors also significantly influence outcomes. 
+
+## Interaction model
+To continue distilling nuanced insights from the data, I introduce the interaction model, a statistical method designed to unravel the synergistic effects between variables. This model is constructed to capture the combined effects of different variables on the response variable. The interactions between variables such as course and temperature, pack and age, among others, are included to understand how these combined factors influence the outcome beyond their individual contributions.The mathematical formulation of the interaction model is as follows: 
+
+\[ 
+\mu_i = \beta_0 + \beta_{\text{Course}} \times \text{Course}_i + \beta_{\text{Age}} \times \text{Age}_i + \beta_{\text{Temp}} \times \text{Temperature}_i
+\]
+
+\[ 
++ \ldots + \beta_{\text{PackTemp}} \times (\text{Pack}_i \times \text{Temperature}_i) + \ldots + u_{\text{Number}_i}
+\]
+
+where \(\beta_0\) is the overall intercept, \(\beta_{\text{Course}}, \beta_{\text{Age}}, \ldots\) are coefficients for the main effects, \(\beta_{\text{PackTemp}}, \ldots\) are coefficients for the interaction terms, and \(u_{\text{Number}_i}\) represents the random athlete-specific effects. This model allows for a deeper understanding of how the variables do not just contribute individually but also how their combinations affect the response.
+```{r include=FALSE}
+model_string <- "
+model {
+  for (i in 1:N) {
+    Response[i] ~ dnorm(mu[i], tau)
+    mu[i] <- beta0 +
+             betaCourse * Course[i] + 
+             betaAge * Age[i] + 
+             betaTemp * Temperature[i] + 
+             betaPack * Pack[i] + 
+             betaYear * Year[i] + 
+             betaWind * Windspeed[i] + 
+             betaDist * Distance[i] +
+             betaCourseTemp * CourseTemp[i] +
+             betaCourseWind * CourseWind[i] +
+             betaPackAge * PackAge[i] +
+             betaPackWind * PackWind[i] +
+             betaPackTemp * PackTemp[i] +
+             u[Number[i]]
+  }
+
+  beta0 ~ dnorm(0, 1)
+  betaCourse ~ dnorm(0, 1)
+  betaAge ~ dnorm(0, 1)
+  betaTemp ~ dnorm(0, 1)
+  betaPack ~ dnorm(0, 1)
+  betaYear ~ dnorm(0, 1)
+  betaWind ~ dnorm(0, 1)
+  betaDist ~ dnorm(0, 1)
+  
+  betaCourseTemp ~ dnorm(0, 1)
+  betaCourseWind ~ dnorm(0, 1)
+  betaPackAge ~ dnorm(0, 1)
+  betaPackWind ~ dnorm(0, 1)
+  betaPackTemp ~ dnorm(0, 1)
+  
+  for (j in 1:maxNumber) {
+    u[j] ~ dnorm(0, tau_u)
+  }
+
+  tau ~ dgamma(1, 0.001)
+  tau_u ~ dgamma(1, 0.001)
+  sigma <- 1 / sqrt(tau)
+}
+"
+
+# Data for the model
+model_data <- list(
+  Response = run$Response,
+  Course = as.numeric(factor(run$Course)),
+  Age = as.numeric(factor(run$Age)),
+  Temperature = run$Temperature,
+  Pack = as.numeric(factor(run$Pack)),
+  Year = run$Year,
+  Windspeed = run$Windspeed,
+  Distance = run$Distance,
+  Number = run$Number,
+  N = nrow(run),
+  maxNumber = max(run$Number),
+  CourseTemp = run$Course * run$Temperature,
+  CourseWind = run$Course * run$Windspeed,
+  PackAge = run$Pack * run$Age,
+  PackWind = run$Pack * run$Windspeed,
+  PackTemp = run$Pack * run$Temperature
+)
+
+# Initial values for the MCMC chain
+model_inits <- function() {
+  list(
+    beta0 = rnorm(1, 0, 1),
+    betaCourse = rnorm(1, 0, 1),
+    betaAge = rnorm(1, 0, 1),
+    betaTemp = rnorm(1, 0, 1),
+    betaPack = rnorm(1, 0, 1),
+    betaYear = rnorm(1, 0, 1),
+    betaWind = rnorm(1, 0, 1),
+    betaDist = rnorm(1, 0, 1),
+    betaCourseTemp = rnorm(1, 0, 1),
+    betaCourseWind = rnorm(1, 0, 1),
+    betaPackAge = rnorm(1, 0, 1),
+    betaPackWind = rnorm(1, 0, 1),
+    betaPackTemp = rnorm(1, 0, 1),
+    tau = rgamma(1, 1, 0.001),
+    u = rep(0, max(run$Number)),
+    tau_u = rgamma(1, 1, 0.001)
+  )
+}
+
+# Parameters to monitor
+params <- c("beta0", "betaCourseTemp", "betaCourseWind", "betaPackAge",
+            "betaPackWind","betaPackTemp",
+            "sigma", "tau", "tau_u")
+
+# Fit the model
+model_fit <- jags.model(textConnection(model_string),
+                        data = model_data,
+                        inits = model_inits,
+                        n.chains = 3,
+                        n.adapt = 1000)
+
+# Burn-in
+update(model_fit, 100000)
+
+# MCMC sampling
+model_samples <- coda.samples(model = model_fit,
+                              variable.names = params,
+                              n.iter = 500000,
+                              thin = 10)
+```
+
+```{r echo=FALSE, fig.align = "center", fig.pos="H"}
+# Checking convergence using the Gelman-Rubin statistic
+gelman_results <- gelman.diag(model_samples)
+psrf_df <- as.data.frame(gelman_results$psrf)
+kable(t(psrf_df), caption = "Gelman-Rubin statistic of interaction terms only(hid others to save space)", digits = 2)
+
+# Checking effective sample sizes
+kable(t(effectiveSize(model_samples)), caption = "Effective Sample Sizes of interaction terms only(hid others to save space)", digits = 2)
+```
+The Bayesian analysis indicated satisfactory convergence for the model parameters, as evidenced by the Gelman-Rubin statistic values nearing 1, suggesting that the MCMC chains have stabilised. Same as the effective sample sizes, crucial for accurate parameter estimation, are robust across the board.
+
+```{r echo=FALSE, fig.align = "center", fig.height = 3, fig.width = 10, fig.pos="H"}
+chains_df_list <- lapply(model_samples, as.data.frame)
+
+posterior_samples <- do.call(rbind, chains_df_list)
+
+par(mfrow=c(2,5))
+for(param in params) {
+  param_samples <- as.vector(posterior_samples[[param]])
+  
+  # Calculate the 95% credible interval
+  ci <- HPDinterval(mcmc(param_samples), prob = 0.95)
+  
+  # Plot the density
+  plot(density(param_samples), main = param, xlab = "", ylab = "Density")
+  abline(v = ci[1,], col = "red", lty = 2)
+}
+
+# Summarising the posterior distribution
+summary_stats <- summary(model_samples)
+
+stats_df <- data.frame(
+  Mean = summary_stats$statistics[, "Mean"],
+  SD = summary_stats$statistics[, "SD"],
+  `2.5%` = summary_stats$quantiles[, "2.5%"],
+  `25%` = summary_stats$quantiles[, "25%"],
+  `50%` = summary_stats$quantiles[, "50%"],
+  `75%` = summary_stats$quantiles[, "75%"],
+  `97.5%` = summary_stats$quantiles[, "97.5%"]
+)
+
+kable(stats_df, caption = "Posterior distribution of interaction terms only(hid others to save space)", digits = 2)
+```
+The posterior density plots for the interaction terms are particularly telling. Such as 'betaCourseTemp' and 'betaPackWind', offer nuanced insights into how combinations of factors interplay to affect race outcomes. Although some interactions do not show a strong effect, with 95% credible intervals spanning zero, this does not diminish their importance. These interactions could still provide valuable information when considering specific conditions or subgroups within the data.
+
+Furthermore, the interaction between pack level and age (betaPackAge) may indicate that the effect of an athlete's pack on their finishing time could vary significantly with age, indicating the distribution of different age groups varies in different Pack group, which meets the observation from the EDA phase. It is possibly due to differences in experience or stamina despite their age difference. 
+
+Similarly, interactions involving environmental factors like temperature and wind (betaCourseTemp, betaCourseWind, betaPackWind, betaPackTemp) suggest that the race conditions could amplify or diminish the effect of the course or pack level, which might be due to the unique geographical or environmental conditions of each course, and these conditions affect different pack groups differently as the athletes in the faster pack may be more experienced or have higher resilience with harsh condition.
+
+## Hierarchical model and mixture distributions
+The Hierarchical model stands out as an advanced approach in statistical modeling, particularly suitable for complex datasets like this one, where data points are naturally clustered into different levels such as age groups, pack groups, and courses. By using this inherent structure, the Hierarchical model allows for the modeling of individual and group-level effects simultaneously, offering a rich, multilayered understanding of the data. This method not only captures the fixed effects of observed variables but also accommodates random effects to account for unobserved heterogeneity among participants and locations. It is mathematically represented as follows:
+
+\[
+\text{Response}_i \sim \mathcal{N}(\mu_i, \tau)
+\]
+
+where the mean $\mu_i$ is a linear combination of the predictors and random effects:
+
+\[
+\mu_i = \beta_0 + \beta_{\text{Course}}[\text{Course}_i] + \beta_{\text{Pack}}[\text{Pack}_i] + \beta_{\text{Age}}[\text{Age}_i] + \beta_{\text{Temp}} \times \text{Temperature}_i + \beta_{\text{Wind}} \times \text{Windspeed}_i \]
+
+\[ + \beta_{\text{Dist}} \times \text{Distance}_i + \beta_{\text{Year}} \times \text{Year}_i + u_{\text{Number}_i}
+\]
+
+In this model, \(\beta_0\) is the overall intercept. The vectors of random effects, \(\beta_{\text{Course}}\), \(\beta_{\text{Pack}}\), and \(\beta_{\text{Age}}\), capture the unique influence of each course, pack, and age group respectively. The fixed effects coefficients for the environmental and temporal variables are denoted by \(\beta_{\text{Temp}}\), \(\beta_{\text{Wind}}\), \(\beta_{\text{Dist}}\), and \(\beta_{\text{Year}}\). The term \(u_{\text{Number}_i}\) represents the random athlete-specific effects. The precision of the response distribution is given by \(\tau\), and \(\tau_u\) is the precision for the random athlete-specific effects. 
+
+```{r include=FALSE}
+# Create mappings for 'Course', 'Pack', and 'Age'
+course_levels <- unique(run_sample$Course)
+run$CourseIndex <- as.numeric(factor(run_sample$Course, levels = course_levels))
+
+pack_levels <- unique(run_sample$Pack)
+run$PackIndex <- as.numeric(factor(run_sample$Pack, levels = pack_levels))
+
+age_levels <- unique(run_sample$Age)
+run$AgeIndex <- as.numeric(factor(run_sample$Age, levels = age_levels))
+
+model_string <- "
+model {
+  for(i in 1:N) {
+    Response[i] ~ dnorm(mu[i], tau)
+    mu[i] <- beta0 + betaCourse[Course[i]] + betaPack[Pack[i]] + betaAge[Age[i]] + betaTemp * Temperature[i] + betaWind * Windspeed[i] + betaDist * Distance[i] + betaYear * Year[i] + u[Number[i]]
+  }
+  
+  beta0 ~ dnorm(0, 1) 
+  for(c in 1:nCourse) {
+    betaCourse[c] ~ dnorm(0, 1)
+  }
+  for(p in 1:nPack) {
+    betaPack[p] ~ dnorm(0, 1)
+  }
+  for(a in 1:nAge) {
+    betaAge[a] ~ dnorm(0, 1)
+  }
+  
+  betaTemp ~ dnorm(0, 1)
+  betaWind ~ dnorm(0, 1)
+  betaDist ~ dnorm(0, 1)
+  betaYear ~ dnorm(0, 1)
+
+  for (j in 1:maxNumber) {
+    u[j] ~ dnorm(0, tau_u)
+  }
+  
+  tau ~ dgamma(1, 0.001)
+  tau_u ~ dgamma(1, 0.001)
+}
+"
+
+# Ensure 'Course', 'Pack' and 'Age' are converted
+nCourse = length(unique(run$CourseIndex))
+nPack = length(unique(run$PackIndex))
+nAge = length(unique(run$AgeIndex))
+maxNumber = max(run$Number)
+
+# Update the data preparation
+model_data <- list(
+  Response = run$Response,
+  Course = run$CourseIndex,
+  Pack = run$PackIndex,
+  Age = run$AgeIndex,
+  Temperature = run$Temperature,
+  Windspeed = run$Windspeed,
+  Distance = run$Distance,
+  Year = run$Year,
+  Number = as.numeric(run$Number),
+  N = nrow(run),
+  nCourse = length(unique(run$CourseIndex)),
+  nPack = length(unique(run$PackIndex)),
+  nAge = length(unique(run$AgeIndex)),
+  maxNumber = max(run$Number)
+)
+
+model_inits <- function() {
+  list(
+    beta0 = rnorm(1, 0, 1),
+    betaCourse = rnorm(nCourse, 0, 1),
+    betaPack = rnorm(nPack, 0, 1),
+    betaAge = rnorm(nAge, 0, 1),
+    betaTemp = rnorm(1, 0, 1),
+    betaWind = rnorm(1, 0, 1),
+    betaDist = rnorm(1, 0, 1),
+    betaYear = rnorm(1, 0, 1),
+    u = rnorm(maxNumber, 0, 1),
+    tau = rgamma(1, 1, 0.001),
+    tau_u = rgamma(1, 1, 0.001)
+  )
+}
+
+params <- c("beta0", "betaCourse", "betaPack", "betaAge", "betaTemp", "betaWind", "betaDist", "betaYear", "tau", "tau_u")
+
+model_fit <- jags.model(textConnection(model_string), data = model_data, inits = model_inits, n.chains = 3, n.adapt = 1000)
+
+update(model_fit, 50000)
+model_samples <- coda.samples(model = model_fit, variable.names = params, n.iter = 500000, thin = 10)
+
+```
+
+Due to the length limitation of the report, the numerical results from the Hierarchical model is shown in the Appendix 1, which provides me strong evidence for convergence of the model. The Gelman-Rubin statistic results, ideally close to 1 for all parameters, suggesting that the different MCMC chains are consistent with each other. This is supported by substantial effective sample sizes in the same table, indicating reliable estimates of the posterior distributions. The large effective sample sizes, particularly for the age group parameters, ensure that the posterior estimates are based on a sufficient amount of information from the MCMC chains.
+
+```{r echo=FALSE, fig.align = "center", fig.cap="Density Plots for Different Age Groups", fig.pos = "H", fig.height = 2.8, fig.width = 8}
+age_samples <- list()
+for(i in 1:length(age_levels)) {
+  age_param <- paste0("betaAge[", i, "]")
+  age_samples[[i]] <- as.matrix(model_samples)[, age_param]
+}
+
+age_data <- do.call(rbind, lapply(1:length(age_levels), function(i) {
+  data.frame(value = age_samples[[i]], group = age_levels[i])
+}))
+
+# Plotting Age with original names
+ggplot(age_data, aes(x = value, fill = group)) +
+  geom_density(alpha = 0.5) +
+  labs(x = "Posterior Sample Values", y = "Density") +
+  theme_minimal() +
+  scale_fill_viridis_d(option = "D", name = "Age Group")
+
+```
+Figure 8 presents a compelling visual narrative of the relationship between age groups and race performance. The density plot for the youngest runners, labeled MU20, is notably skewed to the left, suggesting faster race times than the grand mean, indicative of their youthful advantage. In stark contrast, the plot for the senior group, Msen, sits just right of center, hinting at a slight delay in race times when controlling for other variables. The age groups from MV35 to MV65 exhibit an intriguing gradual shift to the right, with each successive category indicating a subtle but noticeable increase in race times. The MV55 group, hovering near the mean, serves as a transitional point before the more pronounced age-related deceleration becomes apparent in the MV60 and MV65 groups. Meanwhile, the MV70 and MV80 groups, with their broader and more dispersed distributions, speak to the heightened variability and generally slower race times within these elder cohorts. This pattern across the plots not only confirms the significant influence of age on racing prowess, as postulated in the EDA, but also captures the intrinsic diversity of performance within each age group, particularly the oldest competitors.
+
+```{r echo=FALSE, fig.align = "center", fig.cap="Density Plots for Different Pack Groups", fig.pos = "H", fig.height = 2, fig.width = 8}
+pack_samples <- list()
+for(i in 1:length(pack_levels)) {
+  pack_param <- paste0("betaPack[", i, "]")
+  pack_samples[[i]] <- as.matrix(model_samples)[, pack_param]
+}
+
+pack_data <- do.call(rbind, lapply(1:length(pack_levels), function(i) {
+  data.frame(value = pack_samples[[i]], group = pack_levels[i])
+}))
+
+# Plotting Pack using the original Pack names
+ggplot(pack_data, aes(x = value, fill = group)) +
+  geom_density(alpha = 0.5) +
+  labs(x = "Posterior Sample Values", y = "Density") +
+  theme_minimal() +
+  scale_fill_viridis_d(option = "D", name = "Pack Group")
+
+```
+In Figure 9, the density plots for the pack groups unfold a compelling story of race dynamics. The 'F' pack, representing the quick runners, shows a pronounced leftward skew, demonstrating its members' propensity for speed and their tendency to clock in faster race times. This distinct separation from the rest reinforces the pack's characteristic swiftness. Central to the graph, the 'M' pack's density hovers around the zero mark, portraying a median performance with times that are representative of the broader competitor field. At the far right, the 'S' pack's density plot, with its peak markedly right-shifted, is emblematic of more leisurely paces, encapsulating those runners whose race times are generally longer. The graphical stratification displayed here not only validates the pack categorisation employed by the race organisers but also vividly illustrates the substantial impact that pack alignment has on racing performance.
+
+```{r echo=FALSE, fig.align = "center", fig.cap="Density Plots for Different Course Groups", fig.pos = "H", fig.height = 2, fig.width = 8}
+course_samples <- list()
+for(i in 1:length(course_levels)) {
+  course_param <- paste0("betaCourse[", i, "]")
+  course_samples[[i]] <- as.matrix(model_samples)[, course_param]
+}
+
+course_data <- do.call(rbind, lapply(1:length(course_levels), function(i) {
+  data.frame(value = course_samples[[i]], group = course_levels[i])
+}))
+
+# Plotting Course using the original Course names
+ggplot(course_data, aes(x = value, fill = group)) +
+  geom_density(alpha = 0.5) +
+  labs(x = "Posterior Sample Values", y = "Density") +
+  theme_minimal() +
+  scale_fill_viridis_d(option = "D", name = "Course Group")
+```
+Figure 10's density plots reflect the distinct characteristics of each race course and their impact on performance. The plots for Alnwick and Aykley present near the zero mark, suggesting that times here are representative of the overall mean, indicating these courses may offer standard racing conditions. In notable contrast, the plot for Wrekenton is markedly shifted to the right, alluding to slower race times that may reflect the increased difficulty or complexity of this course. Meanwhile, courses like Druidge and Gosforth show wider distributions, hinting at a higher variability in race times which could point to a mix of conditions or a broader spectrum of participant performance levels. The visual juxtaposition of these courses demonstratesthe variable influence of different terrains and settings on racing outcomes.
+
+# Summary
+Upon the analysis, the hierarchical Bayesian model emerged as the most adept at capturing the nuanced interplay of variables influencing race times. It adeptly accommodates the nested data structure, integrating both individual athlete variations and collective group dynamics.
+
+My exploration reinforces the notion that age significantly delineates athletic performance, drawing a vivid line between the vitality of youth and the experience of age, with younger participants outpacing their older counterparts. Pack classification emerged as a defining axis of performance, stratifying athletes in a manner that resonates with their speed capabilities, and varies by the age group at the same time.  Moreover, the character of the race course was illuminated as a significant factor influencing outcomes, with specific locations contributing to significant deviations in race times. Alongside these elements, environmental factors such as temperature and windspeed were found to subtly yet measurably affect race times, with cooler temperatures and milder windspeeds correlating with improved performance. Additionally, the increasing race distances underpin the role of endurance, as longer distances significantly lengthen race times, demonstrating the multifaceted nature of athletic achievement in cross-country running.
+
+In conclusion, this report illuminates the intricate inter-dependencies of age, pack dynamics, and course characteristics, showing that each stroke contributes to the overall performance in the league. The findings, distilled from a Bayesian perspective, present a narrative where the individual athlete's abilities are intertwined with the group identity and environmental factors, all coalescing to shape the outcomes on the race track.
+
+# Appendix 
+
+### 1. Gelman-Rubin Statistic and Effective Sample Sizes of Hierarchical Model
+```{r echo=FALSE, fig.align = "center", out.width = "50%", out.height = "50%", fig.pos="H"}
+# Calculating Gelman-Rubin statistic
+gelman_results <- gelman.diag(model_samples)
+psrf_df <- as.data.frame(gelman_results$psrf)
+colnames(psrf_df) <- c("Gelman-Rubin")
+
+# Calculating effective sample sizes
+ess_df <- as.data.frame(effectiveSize(model_samples))
+colnames(ess_df) <- c("Effective Sample Size")
+
+# Merge
+combined_df <- merge(psrf_df, ess_df, by = "row.names", all = TRUE)
+names(combined_df)[1] <- "Parameter"
+
+# Generating e table with both metrics
+kable(combined_df, digits = 2)
+```
+
+### 2. Posterior distribution Summary of Hierarchical model
+```{r echo=FALSE, fig.align = "center", fig.pos="H"}
+# Summarising the posterior distribution
+summary_stats <- summary(model_samples)
+
+stats_df <- data.frame(
+  Mean = summary_stats$statistics[, "Mean"],
+  SD = summary_stats$statistics[, "SD"],
+  `2.5%` = summary_stats$quantiles[, "2.5%"],
+  `25%` = summary_stats$quantiles[, "25%"],
+  `50%` = summary_stats$quantiles[, "50%"],
+  `75%` = summary_stats$quantiles[, "75%"],
+  `97.5%` = summary_stats$quantiles[, "97.5%"]
+)
+
+kable(stats_df, digits = 2)
+```
