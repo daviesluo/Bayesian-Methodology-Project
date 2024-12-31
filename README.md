@@ -1,4 +1,4 @@
-# Bayesian Analysis of Cross Country Race Times (MAS8384)
+# Bayesian Analysis of Cross Country Race Times
 
 A comprehensive Bayesian analysis project examining race times in the North East Harrier League (NEHL) through multiple Bayesian modeling approaches: Non-conjugate Models, Normal Linear Regression, Interaction Models, and Hierarchical Models.
 
